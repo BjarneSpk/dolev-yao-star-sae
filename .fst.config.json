@@ -1,0 +1,27 @@
+{
+  "fstar_exe": "fstar.exe",
+  "options": [
+    "--cache_dir",
+    "cache",
+    "--hint_dir",
+    "hints",
+    "--use_hints",
+    "--record_hints",
+    "--z3version",
+    "4.15.3"
+  ],
+  "include_dirs": [
+    "src",
+    "deps/dolev-yao-star-extrinsic/src/core",
+    "deps/dolev-yao-star-extrinsic/src/lib",
+    "deps/dolev-yao-star-extrinsic/src/lib/comparse",
+    "deps/dolev-yao-star-extrinsic/src/lib/crypto",
+    "deps/dolev-yao-star-extrinsic/src/lib/event",
+    "deps/dolev-yao-star-extrinsic/src/lib/hpke",
+    "deps/dolev-yao-star-extrinsic/src/lib/label",
+    "deps/dolev-yao-star-extrinsic/src/lib/state",
+    "deps/dolev-yao-star-extrinsic/src/lib/utils",
+    "deps/dolev-yao-star-extrinsic/src/lib/communication",
+    "deps/comparse/src"
+  ]
+}

@@ -1,0 +1,6 @@
+[submodule "deps/dolev-yao-star-extrinsic"]
+	path = deps/dolev-yao-star-extrinsic
+	url = https://github.com/REPROSEC/dolev-yao-star-extrinsic.git
+[submodule "deps/comparse"]
+	path = deps/comparse
+	url = https://github.com/TWal/comparse.git
