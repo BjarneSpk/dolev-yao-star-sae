@@ -187,12 +187,6 @@ instance map_types_database: map_types database_key database_value = {
 /// `Auth`, `Fail` and `Del` events: the outputs of a protocol instance
 /// to the parent process (12.4.8.3).
 
-/// The constructors are ordered by increasing number of fields on purpose:
-/// the OCaml code that F* extracts for the Comparse parser of a type
-/// with constructors of different arities matches the patterns in order,
-/// and reads too far into a value with fewer fields than the pattern
-/// (segmentation fault) if a larger constructor comes first.
-
 [@@ with_bytes bytes]
 type sae_event =
   | EvFail: sta:principal -> peer:principal -> sae_event
@@ -396,6 +390,45 @@ let nothing_init gsi sta peer =
 /// Otherwise, send an SAE Commit message, increment Sc,
 /// send an SAE Confirm message, and transition to Confirmed state.
 
+/// The protocol instance created for the Com event:
+/// checks, secret generation, processing of the peer's SAE Commit message,
+/// and transition to Confirmed state.
+
+[@@ "opaque_to_smt"]
+val nothing_com_new_instance: sae_global_sess_ids -> principal -> database_value -> commit_frame -> traceful (option sae_output)
+let nothing_com_new_instance gsi sta instances com =
+  let peer = com.sa in
+  let* sess_id = new_session_id sta in
+  if com.status <> status_success || not (sae_is_supported_group sta (Commit?.msg com.body).group) then (
+    trigger_event sta (EvDel sta peer);*
+    return (Some [])
+  ) else (
+    let group = (Commit?.msg com.body).group in
+    let*? commit = generate_commit gsi sta peer sess_id in
+    match process_commit commit.pwe commit.rand commit.scalar (Commit?.msg com.body).scalar (Commit?.msg com.body).element with
+    | None -> (
+      trigger_event sta (EvDel sta peer);*
+      return (Some [])
+    )
+    | Some keys -> (
+      let*? sc = return (sae_increment_counter 0) in
+      let st: confirmed_data = {
+        peer; group;
+        scalar = commit.scalar; element = commit.element;
+        peer_scalar = (Commit?.msg com.body).scalar; peer_element = (Commit?.msg com.body).element;
+        kck = keys.kck; pmk = keys.pmk;
+        sc; rc = 0;
+      } in
+      trigger_event sta (EvCommitted sta peer st.scalar st.element);*
+      trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element st.pmk);*
+      set_state sta sess_id (Confirmed st <: sae_instance);*
+      store_instances gsi sta peer {instances with unaccepted = SomeInstance sess_id};*?
+      let* commit_ts = send_commit sta peer group st.scalar st.element in
+      let* confirm_ts = send_confirm sta st in
+      return (Some [commit_ts; confirm_ts])
+    )
+  )
+
 [@@ "opaque_to_smt"]
 val nothing_com: sae_global_sess_ids -> principal -> timestamp -> traceful (option sae_output)
 let nothing_com gsi sta msg_ts =
@@ -415,38 +448,8 @@ let nothing_com gsi sta msg_ts =
   ) in
   if is_known_scalar then
     return (Some [])
-  else (
-    let* sess_id = new_session_id sta in
-    if com.status <> status_success || not (sae_is_supported_group sta (Commit?.msg com.body).group) then (
-      trigger_event sta (EvDel sta peer);*
-      return (Some [])
-    ) else (
-      let group = (Commit?.msg com.body).group in
-      let*? commit = generate_commit gsi sta peer sess_id in
-      match process_commit commit.pwe commit.rand commit.scalar (Commit?.msg com.body).scalar (Commit?.msg com.body).element with
-      | None -> (
-        trigger_event sta (EvDel sta peer);*
-        return (Some [])
-      )
-      | Some keys -> (
-        let*? sc = return (sae_increment_counter 0) in
-        let st: confirmed_data = {
-          peer; group;
-          scalar = commit.scalar; element = commit.element;
-          peer_scalar = (Commit?.msg com.body).scalar; peer_element = (Commit?.msg com.body).element;
-          kck = keys.kck; pmk = keys.pmk;
-          sc; rc = 0;
-        } in
-        trigger_event sta (EvCommitted sta peer st.scalar st.element);*
-        trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element st.pmk);*
-        set_state sta sess_id (Confirmed st <: sae_instance);*
-        store_instances gsi sta peer {instances with unaccepted = SomeInstance sess_id};*?
-        let* commit_ts = send_commit sta peer group st.scalar st.element in
-        let* confirm_ts = send_confirm sta st in
-        return (Some [commit_ts; confirm_ts])
-      )
-    )
-  )
+  else
+    nothing_com_new_instance gsi sta instances com
 
 /// Nothing state, Con event.
 ///
