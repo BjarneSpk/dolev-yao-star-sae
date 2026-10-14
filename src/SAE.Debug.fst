@@ -270,8 +270,8 @@ let run_wrong_password () =
   let sta_b = "STA-B" in
   let* gsi_a = setup_sta sta_a in
   let* gsi_b = setup_sta sta_b in
-  let* password_a = mk_rand NoUsage (join (principal_label sta_a) (principal_label sta_b)) 32 in
-  let* password_b = mk_rand NoUsage (join (principal_label sta_a) (principal_label sta_b)) 32 in
+  let* password_a = mk_rand NoUsage (sae_password_label sta_a sta_b) 32 in
+  let* password_b = mk_rand NoUsage (sae_password_label sta_a sta_b) 32 in
   install_password sta_a gsi_a.passwords sta_b password_a;*?
   install_password sta_b gsi_b.passwords sta_a password_b;*?
 

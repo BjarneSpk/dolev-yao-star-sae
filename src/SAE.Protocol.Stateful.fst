@@ -231,6 +231,15 @@ val sae_instance_label:
 let sae_instance_label sta sess_id =
   principal_tag_state_label sta "SAE.Instance" sess_id
 
+/// The password shared by `sta` and `peer` is known to both STAs:
+/// it is corrupt if a state of one of them is corrupt.
+
+val sae_password_label:
+  principal -> principal ->
+  label
+let sae_password_label sta peer =
+  join (principal_label sta) (principal_label peer)
+
 (*** Password setup ***)
 
 /// Generation of a password shared by two STAs,
