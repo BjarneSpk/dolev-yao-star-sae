@@ -34,12 +34,7 @@ open SAE.Protocol.Total
 /// a function returns `None` if it is not the one handling the situation.
 /// Otherwise it returns the timestamps of the frames it has sent
 /// (the empty list if the frame was silently discarded).
-/// `receive_frame` is the dispatcher of the parent process.
-///
-/// Not modeled (see README.md):
-/// timers (t0, t1) and retransmissions, the Sync counter,
-/// anti-clogging tokens and the Open counter, password identifiers,
-/// group negotiation (a single group is configured), hash-to-element (status code and salt).
+/// receive_frame is the dispatcher of the parent process.
 
 (*** Passwords ***)
 
@@ -235,6 +230,19 @@ val sae_instance_label:
   label
 let sae_instance_label sta sess_id =
   principal_tag_state_label sta "SAE.Instance" sess_id
+
+(*** Password setup ***)
+
+/// Generation of a password shared by two STAs,
+/// and installation in the password store of each STA.
+
+[@@ "opaque_to_smt"]
+val setup_password: sae_global_sess_ids -> principal -> sae_global_sess_ids -> principal -> traceful (option unit)
+let setup_password gsi_a sta_a gsi_b sta_b =
+  let* password = mk_rand NoUsage (sae_password_label sta_a sta_b) 32 in
+  install_password sta_a gsi_a.passwords sta_b password;*?
+  install_password sta_b gsi_b.passwords sta_a password;*?
+  return (Some ())
 
 (*** Parent process: database of protocol instances ***)
 

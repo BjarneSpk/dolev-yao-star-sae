@@ -19,15 +19,6 @@ let setup_sta sta =
   let* database = initialize_database sta in
   return {passwords; database}
 
-/// Generation of a password shared by two STAs.
-
-val setup_password: sae_global_sess_ids -> principal -> sae_global_sess_ids -> principal -> traceful (option unit)
-let setup_password gsi_a sta_a gsi_b sta_b =
-  let* password = mk_rand NoUsage (join (principal_label sta_a) (principal_label sta_b)) 32 in
-  install_password sta_a gsi_a.passwords sta_b password;*?
-  install_password sta_b gsi_b.passwords sta_a password;*?
-  return (Some ())
-
 (*** Helpers ***)
 
 /// The frames sent by a function of the state machine.
