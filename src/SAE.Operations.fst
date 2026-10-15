@@ -4,14 +4,29 @@ open DY.Core
 open DY.Core.Internal.Ord
 open Comparse
 open DY.Lib.Comparse.Glue
+open SAE.Group
 
 #set-options "--fuel 0 --ifuel 1"
+
+/// Choice of the model of the group (see below):
+/// - true: abstract cyclic group (SAE.Group, SAE.Group.Labels)
+/// - false: symbolic encoding with the constructors of DY*
+
+val sae_cyclic_group: bool
+let sae_cyclic_group = true
 
 /// This module contains every arithmetic and cryptographic operation
 /// used by SAE (IEEE Std 802.11-2024, clause 12.4), each as its own function.
 /// The rest of the model only calls these functions,
 /// hence an operation can be replaced by changing a single definition.
 ///
+/// Abstract cyclic group (`sae_cyclic_group = true`):
+/// the group operations are the abstract operations of SAE.Group.
+/// They have no implementation, and the model only relies on
+/// the field, group and module axioms of SAE.Group
+/// and on the label and attacker axioms of SAE.Group.Labels.
+///
+/// Symbolic encoding (`sae_cyclic_group = false`):
 /// DY* has no finite cyclic group with arbitrary base,
 /// no modular arithmetic and no element inverse.
 /// These operations are therefore encoded as symbolic terms
@@ -29,9 +44,9 @@ open DY.Lib.Comparse.Glue
 /// We need:
 /// - commit: scalar = rand + mask, ELEMENT = −(mask·P)
 /// - peer: K = rand_B · ( scalar_A·P + ELEMENT_A )
-///    = rand_B · ((rand_A + mask_A)·P − mask_A·P)  // sae_elem_op_reduce
+///    = rand_B · ((rand_A + mask_A)·P − mask_A·P)  // sae_elem_op_reduce (SAE.Group.sae_cancel)
 ///    = rand_B · (rand_A·P)
-///    = rand_A · rand_B · P
+///    = rand_A · rand_B · P                          // dh (SAE.Group.smul_comm)
 ///
 /// The single non-trivial reduction is the one SAE relies on:
 ///
@@ -226,11 +241,13 @@ let sae_exponent x pwe =
   kdf_expand (kdf_extract pwe x) sae_scalar_op_tag sae_hash_length
 
 /// (x + y) mod r
-/// Commutative: the operands are sorted.
+/// Symbolic encoding: commutative, the operands are sorted.
 
 val sae_add_mod_r: bytes -> bytes -> bytes
 let sae_add_mod_r x y =
-  if x `is_less_than` y then
+  if sae_cyclic_group then
+    s_add x y
+  else if x `is_less_than` y then
     dh_pk (concat sae_add_tag (concat x y))
   else
     dh_pk (concat sae_add_tag (concat y x))
@@ -247,7 +264,9 @@ let sae_add_mod_r x y =
 
 val sae_scalar_op: bytes -> bytes -> bytes
 let sae_scalar_op x e =
-  match e with
+  if sae_cyclic_group then
+    smul x e
+  else match e with
   | DhPub (KdfExpand (KdfExtract pwe y) tag len) ->
     if tag = sae_scalar_op_tag && len = sae_hash_length then
       dh (sae_exponent x pwe) e
@@ -262,7 +281,9 @@ let sae_scalar_op x e =
 
 val sae_inverse_op: bytes -> bytes
 let sae_inverse_op e =
-  match e with
+  if sae_cyclic_group then
+    e_inv e
+  else match e with
   | DhPub (Concat tag e') ->
     if tag = sae_inverse_tag then
       dh_pk e'
@@ -296,12 +317,14 @@ let sae_elem_op_reduce e1 e2 =
   | _, _ -> None
 
 /// elem-op(E1, E2)
-/// Commutative: the reduction is tried in both orders,
+/// Symbolic encoding: commutative, the reduction is tried in both orders,
 /// and the operands of a stuck term are sorted.
 
 val sae_elem_op: bytes -> bytes -> bytes
 let sae_elem_op e1 e2 =
-  match sae_elem_op_reduce e1 e2 with
+  if sae_cyclic_group then
+    e_op e1 e2
+  else match sae_elem_op_reduce e1 e2 with
   | Some res -> res
   | None -> (
     match sae_elem_op_reduce e2 e1 with
@@ -322,7 +345,7 @@ let sae_f k =
 
 (*** Validation ***)
 
-/// The following checks have no symbolic counterpart
+/// In the symbolic encoding, the range checks have no counterpart
 /// (there are no numbers in the symbolic model).
 /// They are kept as functions to stay close to the standard.
 
@@ -330,7 +353,8 @@ let sae_f k =
 
 val sae_is_in_range: bytes -> bool
 let sae_is_in_range x =
-  true
+  if sae_cyclic_group then s_is_in_range x
+  else true
 
 /// Validation of the secret values (12.4.5.2):
 /// 1 < rand < r, 1 < mask < r, and (rand + mask) mod r > 1
@@ -349,15 +373,17 @@ let sae_is_valid_scalar scalar =
 
 val sae_is_valid_element: bytes -> bool
 let sae_is_valid_element element =
-  DhPub? element
+  if sae_cyclic_group then e_is_valid element
+  else DhPub? element
 
 /// Is K the identity element of the group? (12.4.5.4)
-/// Symbolically, K is a proper shared element if and only if it is a `Dh` term.
+/// In the symbolic encoding, K is a proper shared element if and only if it is a `Dh` term.
 /// Every other (stuck) term is treated like the identity element,
 /// i.e., the peer's authentication is rejected.
 
 val sae_is_identity_element: bytes -> bool
 let sae_is_identity_element k =
-  match k with
+  if sae_cyclic_group then e_is_identity k
+  else match k with
   | Dh _ (DhPub _) -> false
   | _ -> true

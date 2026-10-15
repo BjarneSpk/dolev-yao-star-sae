@@ -3,6 +3,7 @@ module SAE.Protocol.Stateful
 open Comparse
 open DY.Core
 open DY.Lib
+open SAE.Group.Labels
 open SAE.Operations
 open SAE.Protocol.Total
 
@@ -402,8 +403,8 @@ val generate_commit: sae_global_sess_ids -> principal -> principal -> state_id -
 let generate_commit gsi sta peer sess_id =
   let*? password = get_password sta gsi.passwords peer in
   let pwe = compute_pwe password sta peer in
-  let* rand = mk_rand NoUsage (sae_instance_label sta sess_id) 32 in
-  let* mask = mk_rand NoUsage (sae_instance_label sta sess_id) 32 in
+  let* rand = mk_rand (if sae_cyclic_group then sae_rand_usage else NoUsage) (sae_instance_label sta sess_id) 32 in
+  let* mask = mk_rand (if sae_cyclic_group then sae_mask_usage rand else NoUsage) (sae_instance_label sta sess_id) 32 in
   let*? commit: compute_commit_result = return (compute_commit pwe rand mask) in
   return (Some ({pwe; rand; scalar = commit.scalar; element = commit.element} <: generate_commit_result))
 

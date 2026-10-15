@@ -3,6 +3,7 @@ module SAE.Operations.Proof
 open Comparse
 open DY.Core
 open DY.Lib
+open SAE.Group
 open SAE.Operations
 open SAE.Protocol.Total
 open DY.Core.Internal.Ord
@@ -13,8 +14,11 @@ open DY.Core.Internal.Ord
 /// two STAs sharing a password and following the protocol
 /// derive the same keys and accept each other's SAE Confirm message.
 ///
-/// These Lemmas show that the symbolic encoding of the group operations
-/// (see SAE.Operations) behaves like the finite cyclic group it stands for.
+/// With the abstract cyclic group (`sae_cyclic_group = true`),
+/// these lemmas follow from the axioms of SAE.Group.
+/// With the symbolic encoding (`sae_cyclic_group = false`),
+/// they show that the encoding (see SAE.Operations)
+/// behaves like the finite cyclic group it stands for.
 
 val reveal_constructors:
   unit ->
@@ -35,6 +39,7 @@ let reveal_constructors () =
 (*** Group operations ***)
 
 /// (x + y) mod r is commutative.
+/// In the symbolic encoding,
 /// sae_add_mod_r sorts its operands with `is_less_than`, like `dh` in DY.Core.Bytes,
 /// so the proof follows `dh_shared_secret_lemma`:
 /// the order is total, and antisymmetric when both comparisons hold.
@@ -44,7 +49,9 @@ val sae_add_mod_r_commutes:
   Lemma (sae_add_mod_r x y == sae_add_mod_r y x)
 let sae_add_mod_r_commutes x y =
   is_less_than_total x y;
-  if x `is_less_than` y then (
+  if sae_cyclic_group then
+    s_add_comm x y
+  else if x `is_less_than` y then (
     if y `is_less_than` x then (
       // x <= y and y <= x: x and y are equal
       is_less_than_antisym x y;
@@ -85,14 +92,25 @@ let sae_generate_pwe_commutes password mac_a mac_b =
     assert (sae_max mac_b mac_a == mac_a /\ sae_min mac_b mac_a == mac_b)
   )
 
-/// The PWE is not an element term (DhPub), it is a hash.
-/// Hence scalar-op(x, PWE) is the element x * PWE,
+/// The PWE is an output of hash-to-element, i.e., a base of the group.
+
+val sae_generate_pwe_is_base:
+  password:bytes -> mac_a:bytes -> mac_b:bytes ->
+  Lemma (is_base (sae_generate_pwe password mac_a mac_b))
+let sae_generate_pwe_is_base password mac_a mac_b =
+  let seed = sae_h (concat (sae_max mac_a mac_b) (sae_min mac_a mac_b)) password in
+  assert (sae_generate_pwe password mac_a mac_b == hash seed)
+
+/// A base is not an element term (DhPub), it is a hash.
+/// Hence, in the symbolic encoding, scalar-op(x, PWE) is the element x * PWE,
 /// which the reductions below rely on.
 
-val sae_generate_pwe_is_not_element:
-  password:bytes -> mac_a:bytes -> mac_b:bytes ->
-  Lemma (~(DhPub? (sae_generate_pwe password mac_a mac_b)))
-let sae_generate_pwe_is_not_element password mac_a mac_b =
+val is_base_is_not_element:
+  p:bytes ->
+  Lemma
+  (requires is_base p)
+  (ensures ~(DhPub? p))
+let is_base_is_not_element p =
   reveal_constructors ()
 
 /// The reduction SAE relies on:
@@ -101,13 +119,18 @@ let sae_generate_pwe_is_not_element password mac_a mac_b =
 val sae_elem_op_reduction:
   pwe:bytes -> rand:bytes -> mask:bytes ->
   Lemma
-  (requires ~(DhPub? pwe))
+  (requires is_base pwe)
   (ensures
     sae_elem_op (sae_scalar_op (sae_add_mod_r rand mask) pwe) (sae_inverse_op (sae_scalar_op mask pwe))
     == sae_scalar_op rand pwe
   )
 let sae_elem_op_reduction pwe rand mask =
-  reveal_constructors ()
+  if sae_cyclic_group then
+    sae_cancel pwe rand mask
+  else (
+    is_base_is_not_element pwe;
+    reveal_constructors ()
+  )
 
 /// scalar-op(x, scalar-op(y, PWE)) = scalar-op(y, scalar-op(x, PWE)),
 /// and this element is not the identity element.
@@ -115,15 +138,21 @@ let sae_elem_op_reduction pwe rand mask =
 val sae_scalar_op_commutes:
   pwe:bytes -> x:bytes -> y:bytes ->
   Lemma
-  (requires ~(DhPub? pwe))
+  (requires is_base pwe /\ sae_is_in_range x /\ sae_is_in_range y)
   (ensures
     sae_scalar_op x (sae_scalar_op y pwe) == sae_scalar_op y (sae_scalar_op x pwe) /\
     not (sae_is_identity_element (sae_scalar_op x (sae_scalar_op y pwe)))
   )
 let sae_scalar_op_commutes pwe x y =
-  reveal_constructors ();
-  reveal_opaque (`%dh) (dh);
-  dh_shared_secret_lemma (sae_exponent x pwe) (sae_exponent y pwe)
+  if sae_cyclic_group then (
+    smul_comm pwe x y;
+    smul_not_identity pwe x y
+  ) else (
+    is_base_is_not_element pwe;
+    reveal_constructors ();
+    reveal_opaque (`%dh) (dh);
+    dh_shared_secret_lemma (sae_exponent x pwe) (sae_exponent y pwe)
+  )
 
 (*** Commitment exchange ***)
 
@@ -133,12 +162,12 @@ val compute_pwe_commutes:
   password:bytes -> sta_a:principal -> sta_b:principal ->
   Lemma (
     compute_pwe password sta_a sta_b == compute_pwe password sta_b sta_a /\
-    ~(DhPub? (compute_pwe password sta_a sta_b))
+    is_base (compute_pwe password sta_a sta_b)
   )
 let compute_pwe_commutes password sta_a sta_b =
   reveal_opaque (`%compute_pwe) (compute_pwe);
   sae_generate_pwe_commutes password (sae_mac_to_bytes sta_a) (sae_mac_to_bytes sta_b);
-  sae_generate_pwe_is_not_element password (sae_mac_to_bytes sta_a) (sae_mac_to_bytes sta_b)
+  sae_generate_pwe_is_base password (sae_mac_to_bytes sta_a) (sae_mac_to_bytes sta_b)
 
 /// When a STA processes the SAE Commit message of its peer,
 /// the shared secret is k = F(rand * (peer-rand * PWE)).
@@ -147,7 +176,7 @@ val compute_shared_secret_correct:
   pwe:bytes -> rand:bytes ->
   peer_rand:bytes -> peer_mask:bytes ->
   Lemma
-  (requires ~(DhPub? pwe))
+  (requires is_base pwe /\ sae_is_in_range rand /\ sae_are_valid_secrets peer_rand peer_mask)
   (ensures (
     let peer_scalar = sae_add_mod_r peer_rand peer_mask in
     let peer_element = sae_inverse_op (sae_scalar_op peer_mask pwe) in
@@ -157,7 +186,10 @@ val compute_shared_secret_correct:
 let compute_shared_secret_correct pwe rand peer_rand peer_mask =
   reveal_opaque (`%verify_peer_commit) (verify_peer_commit);
   reveal_opaque (`%compute_shared_secret) (compute_shared_secret);
-  reveal_constructors ();
+  (if sae_cyclic_group then
+    commit_element_valid pwe peer_mask
+  else
+    reveal_constructors ());
   sae_elem_op_reduction pwe peer_rand peer_mask;
   sae_scalar_op_commutes pwe rand peer_rand
 
@@ -218,7 +250,7 @@ val process_commit_agreement:
   rand_b:bytes -> mask_b:bytes ->
   Lemma
   (requires
-    ~(DhPub? pwe) /\
+    is_base pwe /\
     sae_are_valid_secrets rand_a mask_a /\
     sae_are_valid_secrets rand_b mask_b
   )
@@ -236,11 +268,22 @@ val process_commit_agreement:
 let process_commit_agreement pwe rand_a mask_a rand_b mask_b =
   reveal_opaque (`%compute_commit) (compute_commit);
   reveal_opaque (`%process_commit) (process_commit);
+  assert (sae_is_in_range rand_a /\ sae_is_in_range rand_b);
   compute_shared_secret_correct pwe rand_a rand_b mask_b;
   compute_shared_secret_correct pwe rand_b rand_a mask_a;
   sae_scalar_op_commutes pwe rand_a rand_b;
   let k = sae_f (sae_scalar_op rand_a (sae_scalar_op rand_b pwe)) in
-  derive_keys_commutes k (sae_add_mod_r rand_a mask_a) (sae_add_mod_r rand_b mask_b)
+  derive_keys_commutes k (sae_add_mod_r rand_a mask_a) (sae_add_mod_r rand_b mask_b);
+  let commit_a = compute_commit pwe rand_a mask_a in
+  let commit_b = compute_commit pwe rand_b mask_b in
+  assert (Some? commit_a /\ Some? commit_b);
+  let Some commit_a = commit_a in
+  let Some commit_b = commit_b in
+  assert (commit_b.scalar == sae_add_mod_r rand_b mask_b);
+  assert (compute_shared_secret pwe rand_a commit_b.scalar commit_b.element == Some k);
+  assert (verify_peer_commit commit_b.scalar commit_b.element);
+  let keys_a = process_commit pwe rand_a commit_a.scalar commit_b.scalar commit_b.element in
+  assert (keys_a == derive_keys k commit_a.scalar commit_b.scalar)
 
 (*** Confirmation exchange ***)
 
