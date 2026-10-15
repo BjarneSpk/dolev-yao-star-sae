@@ -121,22 +121,24 @@ val sae_pmk_secrecy_matched:
   )
 let sae_pmk_secrecy_matched tr sta sess_id st = ()
 
-/// Property 6: if the password was not corrupt when `sta` accepted,
+/// Property 6: if the password was not corrupt when `sta` accepted
+/// (i.e. the `guarded` label below is not corrupt),
 /// the attacker does not learn the PMK by corrupting the password later:
 /// it needs a protocol instance of `sta` or of its peer.
 
 val sae_pmk_password_forward_secrecy:
-  tr:trace -> i:timestamp -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
+  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
   Lemma
   (requires
     trace_invariant tr /\
     state_was_set tr sta sess_id (Accepted st <: sae_instance) /\
-    event_triggered_at tr i sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk) /\
-    ~(is_corrupt (prefix tr i) (sae_password_label sta st.peer)) /\
+    event_triggered tr sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk) /\
     attacker_knows tr st.pmk
   )
   (ensures
-    is_corrupt tr (sae_instance_label sta sess_id) \/
-    (exists p p_sess_id. (p == sta \/ p == st.peer) /\ is_corrupt tr (sae_instance_label p p_sess_id))
+    is_corrupt tr (guarded (sae_password_label sta st.peer)
+      (event_triggered_label sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk))) \/
+    (exists sta_sess_id. is_corrupt tr (sae_instance_label sta sta_sess_id)) \/
+    (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id))
   )
-let sae_pmk_password_forward_secrecy tr i sta sess_id st = ()
+let sae_pmk_password_forward_secrecy tr sta sess_id st = ()
