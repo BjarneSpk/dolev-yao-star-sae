@@ -30,7 +30,7 @@ val sae_pmk_agreement:
     event_triggered_at tr i sta (EvAuth sta peer scalar element peer_scalar peer_element pmk)
   )
   (ensures
-    is_corrupt (prefix tr i) (sae_password_label sta peer) \/
+    is_corrupt (prefix tr i) (join (principal_label sta) (principal_label peer)) \/
     event_triggered (prefix tr i) sta (EvConfirmed sta peer peer_scalar peer_element scalar element pmk) \/
     event_triggered (prefix tr i) peer (EvConfirmed peer sta peer_scalar peer_element scalar element pmk)
   )
@@ -71,7 +71,7 @@ val sae_pmk_secrecy:
      state_was_set tr sta sess_id (Accepted st <: sae_instance)) /\
     attacker_knows tr st.pmk
   )
-  (ensures is_corrupt tr (sae_password_label sta st.peer))
+  (ensures is_corrupt tr (join (principal_label sta) (principal_label st.peer)))
 let sae_pmk_secrecy tr sta sess_id st = ()
 
 (*** Properties 2 and 6: secrecy of the PMK of a matched session ***)
@@ -136,7 +136,7 @@ val sae_pmk_password_forward_secrecy:
     attacker_knows tr st.pmk
   )
   (ensures
-    is_corrupt tr (guarded (sae_password_label sta st.peer)
+    is_corrupt tr (guarded (join (principal_label sta) (principal_label st.peer))
       (event_triggered_label sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk))) \/
     (exists sta_sess_id. is_corrupt tr (sae_instance_label sta sta_sess_id)) \/
     (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id))
