@@ -106,6 +106,7 @@ type committed_data = {
 /// the peer's SAE Commit message was received.
 /// Accepted state: additionally, the peer's SAE Confirm message was received.
 /// The secret values and the PWE are not needed anymore.
+/// The PMK is stored in its own state (see below), at `pmk_sess_id`.
 
 [@@ with_bytes bytes]
 type confirmed_data = {
@@ -116,7 +117,7 @@ type confirmed_data = {
   peer_scalar: bytes;
   peer_element: bytes;
   kck: bytes;
-  pmk: bytes;
+  pmk_sess_id: state_id;
   sc: nat_lbytes 2;
   rc: nat_lbytes 2;
 }
@@ -138,6 +139,27 @@ instance parseable_serializeable_bytes_sae_instance: parseable_serializeable byt
 instance local_state_sae_instance: local_state sae_instance = {
   tag = "SAE.Instance";
   format = parseable_serializeable_bytes_sae_instance;
+}
+
+/// The PMK of a protocol instance is stored in a state of its own (the PMK state),
+/// so that it can be compromised without the other values of the protocol instance
+/// (property 5).
+/// The SAE-KCK stays in the state of the protocol instance:
+/// it is a different KDF block than the PMK (12.4.5.4), hence it can have another label.
+
+[@@ with_bytes bytes]
+type sae_pmk_state = {
+  pmk: bytes;
+}
+
+%splice [ps_sae_pmk_state] (gen_parser (`sae_pmk_state))
+%splice [ps_sae_pmk_state_is_well_formed] (gen_is_well_formed_lemma (`sae_pmk_state))
+
+instance parseable_serializeable_bytes_sae_pmk_state: parseable_serializeable bytes sae_pmk_state = mk_parseable_serializeable ps_sae_pmk_state
+
+instance local_state_sae_pmk_state: local_state sae_pmk_state = {
+  tag = "SAE.PMK";
+  format = parseable_serializeable_bytes_sae_pmk_state;
 }
 
 (*** Database of the parent process ***)
@@ -225,6 +247,39 @@ val sae_instance_label:
 let sae_instance_label sta sess_id =
   principal_tag_state_label sta "SAE.Instance" sess_id
 
+(*** Labels of the password and the PMK ***)
+
+/// A state of a STA that is not a PMK state.
+/// Corrupting a PMK state only reveals the PMK,
+/// in particular it does not reveal the password (property 5).
+
+val sae_principal_label_input:
+  principal ->
+  tagged_state_pred_label_input
+let sae_principal_label_input prin1 =
+  fun prin2 tag _ _ ->
+    prin1 == prin2 /\
+    tag =!= local_state_sae_pmk_state.tag
+
+val sae_principal_label: principal -> label
+let sae_principal_label prin =
+  tagged_state_pred_label (sae_principal_label_input prin)
+
+/// A PMK state storing `pmk` (of any STA).
+/// A PMK is compromised on its own by corrupting such a state.
+
+val sae_pmk_label_input:
+  bytes ->
+  typed_state_pred_label_input sae_pmk_state
+let sae_pmk_label_input pmk =
+  fun _ tag _ st ->
+    tag == local_state_sae_pmk_state.tag /\
+    st.pmk == pmk
+
+val sae_pmk_label: bytes -> label
+let sae_pmk_label pmk =
+  typed_state_pred_label (sae_pmk_label_input pmk)
+
 (*** Password setup ***)
 
 /// Generation of a password shared by two STAs,
@@ -233,8 +288,9 @@ let sae_instance_label sta sess_id =
 [@@ "opaque_to_smt"]
 val setup_password: sae_global_sess_ids -> principal -> sae_global_sess_ids -> principal -> traceful (option unit)
 let setup_password gsi_a sta_a gsi_b sta_b =
-  // the password is known to both STAs: it is corrupt if a state of one of them is corrupt
-  let* password = mk_rand NoUsage (join (principal_label sta_a) (principal_label sta_b)) 32 in
+  // the password is known to both STAs:
+  // it is corrupt if a state (other than a PMK state) of one of them is corrupt
+  let* password = mk_rand NoUsage (join (sae_principal_label sta_a) (sae_principal_label sta_b)) 32 in
   install_password sta_a gsi_a.passwords sta_b password;*?
   install_password sta_b gsi_b.passwords sta_a password;*?
   return (Some ())
@@ -247,7 +303,7 @@ let initialize_database =
   initialize_map database_key database_value
 
 /// The protocol instances for a peer
-/// (no instance at all if the peer is not in the database).
+/// (`None` if the peer is not in the database).
 
 [@@ "opaque_to_smt"]
 val lookup_instances: sae_global_sess_ids -> principal -> principal -> traceful database_value
@@ -285,12 +341,29 @@ let delete_instance gsi sta peer sess_id =
   store_instances gsi sta peer {unaccepted; accepted}
 
 /// Upon an Auth event from a protocol instance,
-/// the other protocol instance for the same peer is deleted.
+/// the other protocol instance for the same peer is deleted. (12.4.8.6.1)
 
 [@@ "opaque_to_smt"]
 val accept_instance: sae_global_sess_ids -> principal -> principal -> state_id -> traceful (option unit)
 let accept_instance gsi sta peer sess_id =
   store_instances gsi sta peer {unaccepted = NoInstance; accepted = SomeInstance sess_id}
+
+(*** PMK states ***)
+
+/// Storage of a PMK in a new PMK state.
+
+[@@ "opaque_to_smt"]
+val store_pmk: principal -> bytes -> traceful state_id
+let store_pmk sta pmk =
+  let* pmk_sess_id = new_session_id sta in
+  set_state sta pmk_sess_id ({pmk} <: sae_pmk_state);*
+  return pmk_sess_id
+
+[@@ "opaque_to_smt"]
+val get_pmk: principal -> state_id -> traceful (option bytes)
+let get_pmk sta pmk_sess_id =
+  let*? st: sae_pmk_state = get_state sta pmk_sess_id in
+  return (Some st.pmk)
 
 (*** Transmission of SAE messages ***)
 
@@ -404,15 +477,25 @@ let nothing_com_new_instance gsi sta instances com =
     )
     | Some keys -> (
       let*? sc = return (sae_increment_counter 0) in
+      // the protocol instance gets a state before the PMK state is created,
+      // so that the PMK state gets another session id
+      let committed_st: committed_data = {
+        peer; group;
+        pwe = commit.pwe; rand = commit.rand;
+        scalar = commit.scalar; element = commit.element;
+        sc = 0; rc = 0;
+      } in
+      set_state sta sess_id (Committed committed_st <: sae_instance);*
+      let* pmk_sess_id = store_pmk sta keys.pmk in
       let st: confirmed_data = {
         peer; group;
         scalar = commit.scalar; element = commit.element;
         peer_scalar = (Commit?.msg com.body).scalar; peer_element = (Commit?.msg com.body).element;
-        kck = keys.kck; pmk = keys.pmk;
+        kck = keys.kck; pmk_sess_id;
         sc; rc = 0;
       } in
       trigger_event sta (EvCommitted sta peer st.scalar st.element);*
-      trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element st.pmk);*
+      trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element keys.pmk);*
       set_state sta sess_id (Confirmed st <: sae_instance);*
       store_instances gsi sta peer {instances with unaccepted = SomeInstance sess_id};*?
       let* commit_ts = send_commit sta peer group st.scalar st.element in
@@ -495,14 +578,15 @@ let committed_com gsi sta msg_ts =
     )
     | Some keys -> (
       let*? sc = return (sae_increment_counter own.sc) in
+      let* pmk_sess_id = store_pmk sta keys.pmk in
       let st: confirmed_data = {
         peer; group = own.group;
         scalar = own.scalar; element = own.element;
         peer_scalar = (Commit?.msg com.body).scalar; peer_element = (Commit?.msg com.body).element;
-        kck = keys.kck; pmk = keys.pmk;
+        kck = keys.kck; pmk_sess_id;
         sc; rc = own.rc;
       } in
-      trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element st.pmk);*
+      trigger_event sta (EvConfirmed sta peer st.scalar st.element st.peer_scalar st.peer_element keys.pmk);*
       set_state sta sess_id (Confirmed st <: sae_instance);*
       let* confirm_ts = send_confirm sta st in
       return (Some [confirm_ts])
@@ -565,7 +649,7 @@ let confirmed_com gsi sta msg_ts =
 /// If the verification fails, send a Fail event to the parent process.
 /// Otherwise, set Rc to the received send-confirm counter, set Sc to 2^16 - 1,
 /// send an Auth event to the parent process, and transition to Accepted state.
-/// The protocol instance now holds the PMK shared with the peer.
+/// The PMK (in the PMK state of the protocol instance) is now shared with the peer.
 
 [@@ "opaque_to_smt"]
 val confirmed_con: sae_global_sess_ids -> principal -> timestamp -> traceful (option sae_output)
@@ -582,8 +666,9 @@ let confirmed_con gsi sta msg_ts =
     delete_instance gsi sta peer sess_id;*?
     return (Some [])
   ) else (
+    let*? pmk = get_pmk sta own.pmk_sess_id in
     let st: confirmed_data = {own with rc = (Confirm?.msg con.body).send_confirm; sc = sae_max_counter} in
-    trigger_event sta (EvAuth sta peer st.scalar st.element st.peer_scalar st.peer_element st.pmk);*
+    trigger_event sta (EvAuth sta peer st.scalar st.element st.peer_scalar st.peer_element pmk);*
     set_state sta sess_id (Accepted st <: sae_instance);*
     accept_instance gsi sta peer sess_id;*?
     return (Some [])

@@ -30,7 +30,7 @@ val sae_pmk_agreement:
     event_triggered_at tr i sta (EvAuth sta peer scalar element peer_scalar peer_element pmk)
   )
   (ensures
-    is_corrupt (prefix tr i) (join (principal_label sta) (principal_label peer)) \/
+    is_corrupt (prefix tr i) (join (sae_principal_label sta) (sae_principal_label peer)) \/
     event_triggered (prefix tr i) sta (EvConfirmed sta peer peer_scalar peer_element scalar element pmk) \/
     event_triggered (prefix tr i) peer (EvConfirmed peer sta peer_scalar peer_element scalar element pmk)
   )
@@ -39,7 +39,8 @@ let sae_pmk_agreement tr i sta peer scalar element peer_scalar peer_element pmk 
 (*** Properties 2 and 3: secrecy of the password ***)
 
 /// The password stored by `sta` for `peer` is unknown to the attacker,
-/// unless a state of `sta` or `peer` is corrupt.
+/// unless a state of `sta` or `peer` is corrupt
+/// (corrupting a PMK state does not count).
 /// This holds against the active attacker, hence against the passive one.
 
 val sae_password_secrecy:
@@ -53,92 +54,160 @@ val sae_password_secrecy:
     List.Tot.memP ({key = ({peer} <: password_key); value = ({password} <: password_value)} <: map_elem password_key password_value) passwords.key_values /\
     attacker_knows tr password
   )
-  (ensures is_corrupt tr (principal_label sta) \/ is_corrupt tr (principal_label peer))
+  (ensures is_corrupt tr (sae_principal_label sta) \/ is_corrupt tr (sae_principal_label peer))
 let sae_password_secrecy tr sta sess_id passwords peer password = ()
 
 (*** Property 3: secrecy of the PMK (active attacker) ***)
 
 /// The PMK of a protocol instance in Confirmed or Accepted state
-/// is unknown to the attacker, unless the password is corrupt.
+/// is unknown to the attacker, unless the password is corrupt
+/// or a PMK state storing this PMK (of `sta` or of the peer) is corrupt.
 /// This holds whatever the attacker sent as the peer's SAE Commit message.
 
 val sae_pmk_secrecy:
-  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
+  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data -> pmk:bytes ->
   Lemma
   (requires
     trace_invariant tr /\
     (state_was_set tr sta sess_id (Confirmed st <: sae_instance) \/
      state_was_set tr sta sess_id (Accepted st <: sae_instance)) /\
-    attacker_knows tr st.pmk
+    state_was_set tr sta st.pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    attacker_knows tr pmk
   )
-  (ensures is_corrupt tr (join (principal_label sta) (principal_label st.peer)))
-let sae_pmk_secrecy tr sta sess_id st = ()
+  (ensures
+    is_corrupt tr (join (sae_principal_label sta) (sae_principal_label st.peer)) \/
+    is_corrupt tr (sae_pmk_label pmk)
+  )
+let sae_pmk_secrecy tr sta sess_id st pmk = ()
 
 (*** Properties 2 and 6: secrecy of the PMK of a matched session ***)
 
 /// If the peer's SAE Commit message was computed by a STA `p`
 /// (which confirmed with the same values),
 /// the PMK is unknown to the attacker
-/// unless the protocol instance of `sta` or a protocol instance of `p` is corrupt.
+/// unless the protocol instance of `sta` or a protocol instance of `p` is corrupt,
+/// or a PMK state storing this PMK (of `sta` or of the peer) is corrupt.
 /// The password does not matter.
 
 val sae_pmk_secrecy_with:
-  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
+  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data -> pmk:bytes ->
   p:principal -> q:principal ->
   Lemma
   (requires
     trace_invariant tr /\
     (state_was_set tr sta sess_id (Confirmed st <: sae_instance) \/
      state_was_set tr sta sess_id (Accepted st <: sae_instance)) /\
-    event_triggered tr p (EvConfirmed p q st.peer_scalar st.peer_element st.scalar st.element st.pmk) /\
-    attacker_knows tr st.pmk
+    state_was_set tr sta st.pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    event_triggered tr p (EvConfirmed p q st.peer_scalar st.peer_element st.scalar st.element pmk) /\
+    attacker_knows tr pmk
   )
   (ensures
     is_corrupt tr (sae_instance_label sta sess_id) \/
-    (exists p_sess_id. is_corrupt tr (sae_instance_label p p_sess_id))
+    (exists p_sess_id. is_corrupt tr (sae_instance_label p p_sess_id)) \/
+    is_corrupt tr (sae_pmk_label pmk)
   )
-let sae_pmk_secrecy_with tr sta sess_id st p q = ()
+let sae_pmk_secrecy_with tr sta sess_id st pmk p q = ()
 
 /// Property 2: in a session between two honest STAs
 /// (the peer computed the SAE Commit message that `sta` received,
 /// e.g., because the attacker only observed or relayed the messages),
-/// the PMK is unknown to the attacker, unless one of the two protocol instances is corrupt.
+/// the PMK is unknown to the attacker, unless one of the two protocol instances is corrupt,
+/// or a PMK state storing this PMK (of `sta` or of the peer) is corrupt.
 /// This holds even if the password is corrupt.
 
 val sae_pmk_secrecy_matched:
-  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
+  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data -> pmk:bytes ->
   Lemma
   (requires
     trace_invariant tr /\
     (state_was_set tr sta sess_id (Confirmed st <: sae_instance) \/
      state_was_set tr sta sess_id (Accepted st <: sae_instance)) /\
-    event_triggered tr st.peer (EvConfirmed st.peer sta st.peer_scalar st.peer_element st.scalar st.element st.pmk) /\
-    attacker_knows tr st.pmk
+    state_was_set tr sta st.pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    event_triggered tr st.peer (EvConfirmed st.peer sta st.peer_scalar st.peer_element st.scalar st.element pmk) /\
+    attacker_knows tr pmk
   )
   (ensures
     is_corrupt tr (sae_instance_label sta sess_id) \/
-    (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id))
+    (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id)) \/
+    is_corrupt tr (sae_pmk_label pmk)
   )
-let sae_pmk_secrecy_matched tr sta sess_id st = ()
+let sae_pmk_secrecy_matched tr sta sess_id st pmk = ()
 
 /// Property 6: if the password was not corrupt when `sta` accepted
 /// (i.e. the `guarded` label below is not corrupt),
 /// the attacker does not learn the PMK by corrupting the password later:
-/// it needs a protocol instance of `sta` or of its peer.
+/// it needs a protocol instance of `sta` or of its peer, or a PMK state storing this PMK.
 
 val sae_pmk_password_forward_secrecy:
-  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data ->
+  tr:trace -> sta:principal -> sess_id:state_id -> st:confirmed_data -> pmk:bytes ->
   Lemma
   (requires
     trace_invariant tr /\
     state_was_set tr sta sess_id (Accepted st <: sae_instance) /\
-    event_triggered tr sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk) /\
-    attacker_knows tr st.pmk
+    state_was_set tr sta st.pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    event_triggered tr sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element pmk) /\
+    attacker_knows tr pmk
   )
   (ensures
-    is_corrupt tr (guarded (join (principal_label sta) (principal_label st.peer))
-      (event_triggered_label sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element st.pmk))) \/
+    is_corrupt tr (guarded (join (sae_principal_label sta) (sae_principal_label st.peer))
+      (event_triggered_label sta (EvAuth sta st.peer st.scalar st.element st.peer_scalar st.peer_element pmk))) \/
     (exists sta_sess_id. is_corrupt tr (sae_instance_label sta sta_sess_id)) \/
-    (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id))
+    (exists peer_sess_id. is_corrupt tr (sae_instance_label st.peer peer_sess_id)) \/
+    is_corrupt tr (sae_pmk_label pmk)
   )
-let sae_pmk_password_forward_secrecy tr sta sess_id st = ()
+let sae_pmk_password_forward_secrecy tr sta sess_id st pmk = ()
+
+(*** Property 5: compromise of a PMK ***)
+
+/// The PMK state storing `pmk` was set by `sta` at timestamp `ts`.
+
+val pmk_state_was_set_at: trace -> timestamp -> principal -> state_id -> bytes -> prop
+let pmk_state_was_set_at tr ts sta pmk_sess_id pmk =
+  entry_at tr ts (SetState sta pmk_sess_id (serialize tagged_state {
+    tag = local_state_sae_pmk_state.tag;
+    content = serialize sae_pmk_state ({pmk} <: sae_pmk_state);
+  }))
+
+/// Property 5: the PMK `old_pmk` of another protocol run
+/// (whose PMK state was set at timestamp `old_ts`) is compromised,
+/// i.e. the attacker corrupts this PMK state.
+/// If the PMK of this protocol run can be learned by the attacker
+/// (its label is corrupt) after this corruption,
+/// it could already be learned before:
+/// the compromise of `old_pmk` gives no advantage.
+
+val sae_pmk_compromise_independence:
+  tr:trace -> sta:principal -> pmk_sess_id:state_id -> pmk:bytes ->
+  old_ts:timestamp -> old_sta:principal -> old_pmk_sess_id:state_id -> old_pmk:bytes ->
+  Lemma
+  (requires
+    trace_invariant tr /\
+    state_was_set tr sta pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    pmk_state_was_set_at tr old_ts old_sta old_pmk_sess_id old_pmk /\
+    old_pmk <> pmk /\
+    (let ((), tr_corrupt) = corrupt old_ts tr in
+     is_publishable tr_corrupt pmk)
+  )
+  (ensures is_publishable tr pmk)
+let sae_pmk_compromise_independence tr sta pmk_sess_id pmk old_ts old_sta old_pmk_sess_id old_pmk = ()
+
+/// Property 5, for the password:
+/// the compromise of the PMK `old_pmk` gives no advantage
+/// in learning the password stored by `sta` for `peer`.
+
+val sae_pmk_compromise_password_independence:
+  tr:trace -> sta:principal -> sess_id:state_id ->
+  passwords:map password_key password_value ->
+  peer:principal -> password:bytes ->
+  old_ts:timestamp -> old_sta:principal -> old_pmk_sess_id:state_id -> old_pmk:bytes ->
+  Lemma
+  (requires
+    trace_invariant tr /\
+    state_was_set tr sta sess_id passwords /\
+    List.Tot.memP ({key = ({peer} <: password_key); value = ({password} <: password_value)} <: map_elem password_key password_value) passwords.key_values /\
+    pmk_state_was_set_at tr old_ts old_sta old_pmk_sess_id old_pmk /\
+    (let ((), tr_corrupt) = corrupt old_ts tr in
+     is_publishable tr_corrupt password)
+  )
+  (ensures is_publishable tr password)
+let sae_pmk_compromise_password_independence tr sta sess_id passwords peer password old_ts old_sta old_pmk_sess_id old_pmk = ()

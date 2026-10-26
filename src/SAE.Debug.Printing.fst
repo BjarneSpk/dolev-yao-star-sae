@@ -25,10 +25,10 @@ let message_to_string frame_bytes =
 
 val confirmed_data_to_string: confirmed_data -> string
 let confirmed_data_to_string st =
-  Printf.sprintf "peer=%s, group=%d, scalar=(%s), element=(%s), peer_scalar=(%s), peer_element=(%s), kck=(%s), pmk=(%s), sc=%d, rc=%d"
+  Printf.sprintf "peer=%s, group=%d, scalar=(%s), element=(%s), peer_scalar=(%s), peer_element=(%s), kck=(%s), pmk_sess_id=%d, sc=%d, rc=%d"
     st.peer st.group (bytes_to_string st.scalar) (bytes_to_string st.element)
     (bytes_to_string st.peer_scalar) (bytes_to_string st.peer_element)
-    (bytes_to_string st.kck) (bytes_to_string st.pmk) st.sc st.rc
+    (bytes_to_string st.kck) st.pmk_sess_id.the_id st.sc st.rc
 
 val instance_to_string: bytes -> option string
 let instance_to_string sess_bytes =
@@ -45,6 +45,11 @@ let instance_to_string sess_bytes =
   | Accepted st -> (
     Some (Printf.sprintf "Accepted[%s]" (confirmed_data_to_string st))
   )
+
+val pmk_state_to_string: bytes -> option string
+let pmk_state_to_string content_bytes =
+  let? st = parse sae_pmk_state content_bytes in
+  Some (Printf.sprintf "PMK[pmk=(%s)]" (bytes_to_string st.pmk))
 
 val passwords_to_string: list (map_elem password_key password_value) -> string
 let rec passwords_to_string m =
@@ -114,6 +119,7 @@ let sae_trace_to_string_printers =
     message_to_string
     [
       (local_state_sae_instance.tag, instance_to_string);
+      (local_state_sae_pmk_state.tag, pmk_state_to_string);
       (map_types_passwords.tag, passwords_state_to_string);
       (map_types_database.tag, database_state_to_string);
     ]

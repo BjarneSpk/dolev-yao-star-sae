@@ -49,7 +49,7 @@ let get_accepted_pmk gsi sta peer =
   guard_tr (SomeInstance? instances.accepted);*?
   let*? st: sae_instance = get_state sta (SomeInstance?.sess_id instances.accepted) in
   guard_tr (Accepted? st);*?
-  return (Some (Accepted?.st st).pmk)
+  get_pmk sta (Accepted?.st st).pmk_sess_id
 
 /// Successful termination: both STAs have accepted, and share the PMK.
 
@@ -403,7 +403,7 @@ let run_replay_after_accept () =
   return (no_frame out);*?
 
   let*? pmk_after = get_accepted run.gsi_a sta_a sta_b in
-  return (check (pmk_before.rc = 1 && pmk_after.rc = 1 && pmk_before.pmk = pmk_after.pmk))
+  return (check (pmk_before.rc = 1 && pmk_after.rc = 1 && pmk_before.pmk_sess_id = pmk_after.pmk_sess_id))
 
 /// Case 6: malformed and unexpected frames for a STA without protocol instance.
 ///
