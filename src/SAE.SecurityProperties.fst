@@ -175,21 +175,35 @@ let pmk_state_was_set_at tr ts sta pmk_sess_id pmk =
 /// (its label is corrupt) after this corruption,
 /// it could already be learned before:
 /// the compromise of `old_pmk` gives no advantage.
+/// The other protocol run has another context (sum of the two scalars, 12.4.5.4)
+/// than this protocol run.
+/// This excludes this protocol run, and the protocol instance
+/// that computed the peer's scalar (the peer, in a session without attacker),
+/// whose PMK is derived from the same context.
 
 val sae_pmk_compromise_independence:
-  tr:trace -> sta:principal -> pmk_sess_id:state_id -> pmk:bytes ->
-  old_ts:timestamp -> old_sta:principal -> old_pmk_sess_id:state_id -> old_pmk:bytes ->
+  tr:trace ->
+  sta:principal -> sess_id:state_id -> st:confirmed_data -> pmk:bytes ->
+  old_ts:timestamp -> old_sta:principal -> old_sess_id:state_id -> old_st:confirmed_data -> old_pmk:bytes ->
   Lemma
   (requires
     trace_invariant tr /\
-    state_was_set tr sta pmk_sess_id ({pmk} <: sae_pmk_state) /\
-    pmk_state_was_set_at tr old_ts old_sta old_pmk_sess_id old_pmk /\
-    old_pmk <> pmk /\
-    (let ((), tr_corrupt) = corrupt old_ts tr in
-     is_publishable tr_corrupt pmk)
+    // this protocol run
+    (state_was_set tr sta sess_id (Confirmed st <: sae_instance) \/
+     state_was_set tr sta sess_id (Accepted st <: sae_instance)) /\
+    state_was_set tr sta st.pmk_sess_id ({pmk} <: sae_pmk_state) /\
+    // the other protocol run, with another context
+    (state_was_set tr old_sta old_sess_id (Confirmed old_st <: sae_instance) \/
+     state_was_set tr old_sta old_sess_id (Accepted old_st <: sae_instance)) /\
+    pmk_state_was_set_at tr old_ts old_sta old_st.pmk_sess_id old_pmk /\
+    sae_add_mod_r old_st.scalar old_st.peer_scalar <> sae_add_mod_r st.scalar st.peer_scalar
   )
-  (ensures is_publishable tr pmk)
-let sae_pmk_compromise_independence tr sta pmk_sess_id pmk old_ts old_sta old_pmk_sess_id old_pmk = ()
+  (ensures
+    (let ((), tr_corrupt) = corrupt old_ts tr in
+     is_publishable tr_corrupt pmk) ==>
+    is_publishable tr pmk
+  )
+let sae_pmk_compromise_independence tr sta sess_id st pmk old_ts old_sta old_sess_id old_st old_pmk = ()
 
 /// Property 5, for the password:
 /// the compromise of the PMK `old_pmk` gives no advantage
@@ -205,9 +219,11 @@ val sae_pmk_compromise_password_independence:
     trace_invariant tr /\
     state_was_set tr sta sess_id passwords /\
     List.Tot.memP ({key = ({peer} <: password_key); value = ({password} <: password_value)} <: map_elem password_key password_value) passwords.key_values /\
-    pmk_state_was_set_at tr old_ts old_sta old_pmk_sess_id old_pmk /\
-    (let ((), tr_corrupt) = corrupt old_ts tr in
-     is_publishable tr_corrupt password)
+    pmk_state_was_set_at tr old_ts old_sta old_pmk_sess_id old_pmk
   )
-  (ensures is_publishable tr password)
+  (ensures
+    (let ((), tr_corrupt) = corrupt old_ts tr in
+     is_publishable tr_corrupt password) ==>
+    is_publishable tr password
+  )
 let sae_pmk_compromise_password_independence tr sta sess_id passwords peer password old_ts old_sta old_pmk_sess_id old_pmk = ()
