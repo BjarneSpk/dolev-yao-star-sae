@@ -65,6 +65,19 @@ $(PROJECT_HOME)/hints $(PROJECT_HOME)/cache $(PROJECT_HOME)/obj:
 .PHONY: check
 check: $(addsuffix .checked,$(addprefix $(PROJECT_HOME)/cache/,$(notdir $(FSTAR_ROOTS))))
 
+SANITY_FLAGS = $(filter-out --cache_checked_modules --record_hints,$(FSTAR_FLAGS)) --include $(PROJECT_HOME)/sanity
+SANITY_LEMMAS = $(shell grep -oE '^val (ok|bad)_[a-z_]+' $(PROJECT_HOME)/sanity/SAE.Group.Sanity.fst | cut -d' ' -f2)
+
+.PHONY: sanity
+sanity: $(PROJECT_HOME)/cache/SAE.Group.Labels.fst.checked
+	@for l in $(SANITY_LEMMAS); do \
+	  if $(FSTAR) $(SANITY_FLAGS) SAE.Group.Sanity.fst --admit_except "SAE.Group.Sanity.$$l" > /dev/null 2>&1; \
+	  then r=verifies; else r=fails; fi; \
+	  case $$l in ok_*) e=verifies;; *) e=fails;; esac; \
+	  if [ $$r = $$e ]; then s=OK; else s=UNEXPECTED; fi; \
+	  echo "$$s  $$l $$r (expected: $$e)"; \
+	done
+
 # Extraction to OCaml and execution of the honest runs (SAE.Debug)
 # `make test` needs OCaml (the version F* was built with), ocamlfind, ocamlbuild and batteries.
 
